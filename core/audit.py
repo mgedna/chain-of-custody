@@ -73,11 +73,16 @@ def log_user_added(name: str) -> None:
 
 
 def log_transfer(probe_id: int, from_user: str, to_user: str, integrity_valid: bool, current_hash: str) -> None:
-    """Log when a transfer is recorded."""
-    status_text = "VALID" if integrity_valid else "ALTERED"
-    details = f"Probe ID: {probe_id}, From: {from_user}, To: {to_user}, Status: {status_text}, Hash: {current_hash[:16]}..."
-    status = "SUCCESS" if integrity_valid else "WARNING"
-    log_action("TRANSFER", details, status)
+    """
+    Log when a transfer is recorded.
+    
+    CRITICAL: Transfer status is ALWAYS SUCCESS (transfer is procedurally documented).
+    Integrity status (VALID/ALTERED) is SEPARATE and informational - it does not
+    cause transfer failure. Compromised evidence must still be transferred and logged.
+    """
+    integrity_status = "VALID" if integrity_valid else "ALTERED"
+    details = f"Probe ID: {probe_id}, From: {from_user}, To: {to_user}, Integrity: {integrity_status}, Hash: {current_hash[:16]}..."
+    log_action("TRANSFER", details, "SUCCESS")
 
 
 def log_integrity_check(probe_id: int, is_valid: Optional[bool], current_hash: str) -> None:
@@ -95,6 +100,23 @@ def log_integrity_check(probe_id: int, is_valid: Optional[bool], current_hash: s
     details = f"Probe ID: {probe_id}, Status: {status_text}, Hash: {current_hash[:16]}..."
     log_action("VERIFY_INTEGRITY", details, status)
 
+def log_credential_analysis(probe_id: int, hash_type: str, total_hashes: int, cracked_hashes: int, crack_rate: float) -> None:
+    """
+    Log credential analysis action as ANALYSIS event.
+    
+    NOTE: This is a non-procedural analysis event that does NOT affect chain of custody.
+    Credential analysis is optional and demonstrative only.
+    
+    Args:
+        probe_id: ID of analyzed probe
+        hash_type: Type of hashes analyzed (MD5, SHA256, BCRYPT, etc.)
+        total_hashes: Total number of hashes analyzed
+        cracked_hashes: Number of successfully cracked hashes
+        crack_rate: Percentage of hashes cracked (0-100)
+    """
+    details = f"Probe ID: {probe_id}, Hash Type: {hash_type}, Hashes: {total_hashes}, Cracked: {cracked_hashes}, Rate: {crack_rate:.1f}%"
+    status = "SUCCESS" if total_hashes > 0 else "FAILURE"
+    log_action("ANALYSIS", details, status)
 
 def log_error(action: str, error_msg: str) -> None:
     """Log an error."""

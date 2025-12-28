@@ -1,7 +1,7 @@
 import streamlit as st
 from config import APP_TITLE, APP_VERSION
 
-from core.database import init_db, get_probes_for_user, get_probes_currently_held
+from core.database import init_db, get_probes_for_user, get_probes_currently_held, get_user_role
 from core.auth import authenticate_user, get_user_by_id, create_user_with_password
 from core.custody import (
     add_probe,
@@ -15,7 +15,9 @@ from core.custody import (
     generate_probe_text_report_with_id,
     generate_probe_pdf_report_with_id,
     get_audit_log,
-    get_current_custodian
+    get_current_custodian,
+    can_download_evidence,
+    can_download_reports
 )
 
 init_db()
@@ -33,11 +35,11 @@ if "user_id" not in st.session_state:
     
     with tab_login:
         st.subheader("Login")
-        username = st.text_input("Username", key="login_username")
+        email = st.text_input("Email Address", key="login_email")
         password = st.text_input("Password", type="password", key="login_password")
         
         if st.button("🔓 Login", key="login_button"):
-            result = authenticate_user(username, password)
+            result = authenticate_user(email, password)
             if result:
                 user_id, user_name = result
                 st.session_state.user_id = user_id
@@ -49,17 +51,25 @@ if "user_id" not in st.session_state:
     
     with tab_register:
         st.subheader("Create New Account")
-        st.write("Register as a new custodian")
+        st.write("Register as a new custodian or investigator")
         
-        new_username = st.text_input("Choose Username", key="register_username")
-        new_password = st.text_input("Choose Password", type="password", key="register_password")
+        new_email = st.text_input("Email Address", key="register_email", help="Your email will be used to login")
+        new_username = st.text_input("Display Name (Optional)", key="register_username", help="Leave blank to use part of your email")
+        new_password = st.text_input("Password", type="password", key="register_password")
         confirm_password = st.text_input("Confirm Password", type="password", key="register_confirm")
         
+        user_role = st.selectbox(
+            "User Role",
+            options=["CUSTODIAN", "INVESTIGATOR"],
+            help="CUSTODIAN: Holds evidence | INVESTIGATOR: Can analyze evidence",
+            key="register_role"
+        )
+        
         if st.button("📝 Create Account", key="register_button"):
-            if not new_username.strip():
-                st.error("❌ Username cannot be empty")
-            elif len(new_username) < 3:
-                st.error("❌ Username must be at least 3 characters")
+            if not new_email.strip():
+                st.error("❌ Email cannot be empty")
+            elif "@" not in new_email or "." not in new_email:
+                st.error("❌ Please enter a valid email address")
             elif not new_password:
                 st.error("❌ Password cannot be empty")
             elif len(new_password) < 6:
@@ -68,12 +78,13 @@ if "user_id" not in st.session_state:
                 st.error("❌ Passwords do not match")
             else:
                 try:
-                    create_user_with_password(new_username.strip(), new_password)
+                    display_name = new_username.strip() if new_username.strip() else None
+                    create_user_with_password(new_email.strip(), new_password, display_name, user_role)
                     st.success(f"✅ Account created successfully!")
-                    st.info(f"Username: **{new_username.strip()}**\n\nYou can now login.")
+                    st.info(f"Email: **{new_email.strip()}**\nRole: **{user_role}**\n\nYou can now login with your email.")
                 except Exception as e:
                     if "UNIQUE constraint failed" in str(e):
-                        st.error(f"❌ Username '{new_username.strip()}' already exists")
+                        st.error(f"❌ Email '{new_email.strip()}' already registered")
                     else:
                         st.error(f"❌ Error creating account: {str(e)}")
     
@@ -93,18 +104,33 @@ with col2:
         st.rerun()
 
 st.caption(f"Logged in as: **{st.session_state.username}**")
+
+user_role = get_user_role(st.session_state.username)
+role_emoji = {"ADMIN": "👑", "INVESTIGATOR": "🔬", "CUSTODIAN": "📦"}.get(user_role, "")
+st.caption(f"Role: {role_emoji} **{user_role}**")
 st.caption("Authentication and validation of digital evidence")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "1️⃣ Add Evidence",
-    "2️⃣ Custody Transfer",
-    "3️⃣ Integrity Check",
-    "4️⃣ Report",
-    "5️⃣ Audit Log",
-    "6️⃣ Status & Checks"
-])
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📌 Navigation Menu")
+st.sidebar.markdown("Select a module to access:")
 
-with tab1:
+current_module = st.sidebar.radio(
+    "Choose Module:",
+    options=[
+        "1️⃣ Add Evidence",
+        "2️⃣ Custody Transfer",
+        "3️⃣ Integrity Check",
+        "4️⃣ Report",
+        "5️⃣ Audit Log",
+        "6️⃣ Status & Checks",
+        "7️⃣ Credential Analysis"
+    ],
+    label_visibility="collapsed"
+)
+
+st.sidebar.markdown("---")
+
+if current_module == "1️⃣ Add Evidence":
     st.subheader("Add Digital Evidence")
 
     uploaded_file = st.file_uploader(
@@ -131,7 +157,7 @@ with tab1:
             st.code(f"SHA-256: {st.session_state.last_sha256}")
             st.info(f"Evidence stored safely. Probe ID: {st.session_state.last_probe_id}")
 
-with tab2:
+if current_module == "2️⃣ Custody Transfer":
     st.subheader("Custody Transfer")
 
     from core.database import get_probes_currently_held
@@ -168,9 +194,16 @@ with tab2:
             )
             
             transfer_reason = st.text_input(
-                "Transfer Reason",
+                "Transfer Reason *",
                 placeholder="e.g., For analysis, Evidence verification, Storage transfer...",
                 help="Document why this evidence is being transferred (NIST compliance)"
+            )
+            
+            transfer_notes = st.text_area(
+                "Transfer Notes/Comments",
+                placeholder="Add optional investigator notes, analysis findings, or chain integrity comments...",
+                height=100,
+                help="Document investigator observations and chain integrity information"
             )
 
             if st.button("Perform Transfer"):
@@ -178,28 +211,33 @@ with tab2:
                     st.error("❌ Transfer reason is required (NIST/Forensic standard)")
                 else:
                     try:
-                        integrity_valid, original_hash, current_hash = add_transfer(
+                        transfer_status, integrity_status, original_hash, current_hash = add_transfer(
                             selected_probe_id,
                             from_user,
                             to_user,
-                            transfer_reason.strip()
+                            transfer_reason.strip(),
+                            transfer_notes.strip()
                         )
                         
-                        if integrity_valid:
-                            st.success("✅ Transfer recorded - Evidence integrity verified.")
-                            st.info(f"Hash matches original: {current_hash[:16]}...")
+                        if transfer_status == 'SUCCESS':
+                            if integrity_status:
+                                st.success("✅ Transfer recorded - Evidence integrity verified.")
+                                st.info(f"Hash matches original: {current_hash[:16]}...")
+                            else:
+                                st.warning("⚠️ Transfer recorded - Evidence integrity ALTERED!")
+                                st.warning("Note: Integrity compromise does NOT invalidate chain of custody.")
+                                st.warning("Compromised evidence remains fully documented and traceable.")
+                                st.code(f"Original Hash: {original_hash[:32]}...")
+                                st.code(f"Current Hash:  {current_hash[:32]}...")
                             st.rerun()
                         else:
-                            st.warning("⚠️ Transfer recorded - Evidence integrity ALTERED!")
-                            st.code(f"Original Hash: {original_hash[:32]}...")
-                            st.code(f"Current Hash:  {current_hash[:32]}...")
-                            st.rerun()
+                            st.error(f"❌ Transfer failed: {transfer_status}")
                     except ValueError as e:
                         st.error(f"❌ Transfer validation failed:\n{str(e)}")
                     except Exception as e:
                         st.error(f"❌ Error during transfer:\n{str(e)}")
 
-with tab3:
+if current_module == "3️⃣ Integrity Check":
     st.subheader("Evidence Integrity Verification")
 
     user_probes = get_probes_for_user(st.session_state.username)
@@ -240,7 +278,7 @@ with tab3:
                     st.error("❌ Evidence was ALTERED.")
                     st.code(f"Current SHA-256: {current_hash}")
 
-with tab4:
+if current_module == "4️⃣ Report":
     st.subheader("Evidence Reports")
 
     user_probes = get_probes_for_user(st.session_state.username)
@@ -286,12 +324,15 @@ with tab4:
                     )
                 
                 with col2:
-                    st.download_button(
-                        label="📑 Download Report (.pdf)",
-                        data=report_pdf,
-                        file_name=f"evidence_report_{selected_probe_id}.pdf",
-                        mime="application/pdf"
-                    )
+                    if can_download_evidence(st.session_state.username, user_role):
+                        st.download_button(
+                            label="📑 Download Report (.pdf)",
+                            data=report_pdf,
+                            file_name=f"evidence_report_{selected_probe_id}.pdf",
+                            mime="application/pdf"
+                        )
+                    else:
+                        st.info("📑 PDF download restricted to INVESTIGATOR and ADMIN roles")
         
         else:
             st.markdown("### Generate Overall Chain of Custody Report")
@@ -328,7 +369,7 @@ with tab4:
                         mime="application/pdf"
                     )
 
-with tab5:
+if current_module == "5️⃣ Audit Log":
     st.subheader("Audit Log - System Actions")
     
     col1, col2 = st.columns([3, 1])
@@ -362,7 +403,7 @@ with tab5:
                 if error_msg:
                     st.error(f"**Error:** {error_msg}")
 
-with tab6:
+if current_module == "6️⃣ Status & Checks":
     st.subheader("Evidence Status & Integrity Verification")
     
     tab_status, tab_checks = st.tabs(["📋 Status Management", "🔍 Automated Checks"])
@@ -431,3 +472,177 @@ with tab6:
                         st.code(hash_val[:16] + "...")
             else:
                 st.success("✅ All probes verified - No alterations detected")
+
+if current_module == "7️⃣ Credential Analysis":
+    st.subheader("🔐 Credential Security Analysis")
+    
+    st.markdown("""
+    **[OPTIONAL - DEMONSTRATIVE MODULE]**
+    
+    This module provides optional post-acquisition analysis of extracted credential hashes 
+    using Hashcat for dictionary-based attack testing. This analysis:
+    - ✅ Operates on **working copies** (never modifies original evidence)
+    - ✅ Does **NOT affect** chain of custody or integrity verification
+    - ✅ Stores only **statistics** (no plaintext passwords)
+    - ✅ Is **completely optional** for forensic investigation
+    """)
+    
+    st.divider()
+    
+    analysis_col1, analysis_col2 = st.columns([1, 1])
+    
+    with analysis_col1:
+        st.markdown("### Upload Hash File")
+        
+        probes_list = get_probes_currently_held(st.session_state.username)
+        if not probes_list:
+            st.warning("No evidence currently in your custody for analysis")
+            probes_list = []
+        
+        if probes_list:
+            probe_options = {f"ID {p[0]}: {p[1]}": p[0] for p in probes_list}
+            selected_probe_display = st.selectbox(
+                "Select evidence to associate with analysis",
+                options=probe_options.keys()
+            )
+            selected_probe_id = probe_options[selected_probe_display]
+        else:
+            selected_probe_id = None
+        
+        from core.analysis import HASHCAT_TYPES
+        hash_type_options = list(HASHCAT_TYPES.keys())
+        selected_hash_type = st.selectbox(
+            "Select hash type",
+            options=hash_type_options,
+            help="Type of hashes in your file (MD5, SHA256, BCRYPT, NTLM, etc.)"
+        )
+        
+        hash_file = st.file_uploader(
+            "Upload text file containing hashes (one per line)",
+            type=["txt"],
+            help="Plain text file with one hash per line"
+        )
+        
+        analysis_ready = hash_file is not None and selected_probe_id is not None
+        
+        if st.button("▶️ Run Credential Analysis", disabled=not analysis_ready, type="primary"):
+            if not hash_file:
+                st.error("Please upload a hash file")
+            elif selected_probe_id is None:
+                st.error("Please select evidence to analyze")
+            else:
+                st.info("⏳ Running analysis... This may take a moment depending on hash count and wordlist size.")
+                
+                try:
+                    hash_content = hash_file.read().decode('utf-8')
+                    
+                    from core.analysis import perform_analysis
+                    success, results = perform_analysis(hash_content, selected_hash_type)
+                    
+                    if success:
+                        total_hashes = results.get('total_hashes', 0)
+                        cracked_hashes = results.get('cracked_hashes', 0)
+                        crack_rate = results.get('crack_rate_percent', 0)
+                        findings = results.get('findings', '')
+                        
+                        from core.database import save_analysis_results
+                        analysis_id = save_analysis_results(
+                            selected_probe_id,
+                            selected_hash_type,
+                            total_hashes,
+                            cracked_hashes,
+                            crack_rate,
+                            findings,
+                            st.session_state.username
+                        )
+                        
+                        from core.audit import log_credential_analysis
+                        log_credential_analysis(
+                            selected_probe_id,
+                            selected_hash_type,
+                            total_hashes,
+                            cracked_hashes,
+                            crack_rate
+                        )
+                        
+                        st.success("✅ Analysis completed and saved")
+                        st.rerun()
+                    else:
+                        error_msg = results.get('error', 'Unknown error during analysis')
+                        st.error(f"❌ Analysis failed: {error_msg}")
+                        
+                except UnicodeDecodeError:
+                    st.error("❌ Could not read file - ensure it's a valid text file")
+                except Exception as e:
+                    st.error(f"❌ Error during analysis: {str(e)}")
+    
+    with analysis_col2:
+        st.markdown("### Analysis Results")
+        
+        if selected_probe_id is not None:
+            from core.database import get_analysis_summary
+            analysis = get_analysis_summary(selected_probe_id)
+            
+            if analysis:
+                st.success("✅ Analysis found for this evidence")
+                st.markdown(f"""
+                **Analysis Details:**
+                - **Hash Type:** {analysis['hash_type']}
+                - **Timestamp:** {analysis['timestamp']}
+                - **Analyst:** {analysis['analyzed_by']}
+                
+                **Results:**
+                - **Total Hashes:** {analysis['total_hashes']}
+                - **Cracked:** {analysis['cracked_hashes']}
+                - **Crack Rate:** {analysis['crack_rate']:.1f}%
+                
+                **Findings:**
+                {analysis['findings']}
+                
+                ---
+                
+                **Security Note:**
+                No plaintext passwords are stored. This module operates on temporary working 
+                copies and does not modify original evidence or affect the chain of custody.
+                """)
+            else:
+                st.info("No credential analysis performed yet for this evidence")
+                st.markdown("""
+                To perform analysis:
+                1. Upload a text file with extracted credential hashes
+                2. Select the appropriate hash type
+                3. Click "Run Credential Analysis"
+                """)
+        else:
+            st.info("Select evidence from the left panel to view existing analysis")
+    
+    st.divider()
+    st.markdown("""
+    ### Module Documentation
+    
+    **Purpose:** Optional post-acquisition credential security assessment
+    
+    **Workflow:**
+    1. Extract credential hashes from evidence (externally)
+    2. Upload hashes to this module
+    3. Select hash type and run dictionary attack
+    4. Review cracking statistics
+    5. Analysis is logged and included in evidence reports
+    
+    **Security Properties:**
+    - ✅ Operates on working copies only
+    - ✅ No plaintext passwords stored
+    - ✅ Separate from chain of custody logic
+    - ✅ Optional analysis only
+    
+    **Limitations:**
+    - Dictionary attack only (not brute force)
+    - Requires Hashcat to be installed on system
+    - Analysis time depends on wordlist and hash count
+    
+    **For Production Use:**
+    - Customize wordlist for your environment
+    - Consider attack time vs. accuracy tradeoffs
+    - Review and audit all analysis results
+    - Integrate with your forensic workflow
+    """)

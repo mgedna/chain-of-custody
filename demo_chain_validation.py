@@ -1,8 +1,3 @@
-"""
-Demo: Custody chain validation
-Shows how the system enforces proper custody chain
-"""
-
 import os
 import sys
 from pathlib import Path
@@ -40,49 +35,49 @@ def demo():
     
     print_section("TEST 1: Valid First Transfer (Alice -> Bob)")
     try:
-        integrity, orig, curr = add_transfer(probe_id, "Officer Alice", "Officer Bob")
-        print("✓ PASS: Transfer allowed (Alice -> Bob)")
+        transfer_status, integrity_status, orig, curr = add_transfer(probe_id, "Officer Alice", "Officer Bob")
+        print(f"✓ PASS: Transfer allowed (Alice -> Bob) - Status: {transfer_status}")
     except ValueError as e:
         print(f"✗ FAIL: {e}")
     
     print_section("TEST 2: Invalid Transfer - Wrong Custodian (Charlie -> Dave)")
     try:
-        integrity, orig, curr = add_transfer(probe_id, "Officer Charlie", "Officer Dave")
+        transfer_status, integrity_status, orig, curr = add_transfer(probe_id, "Officer Charlie", "Officer Dave")
         print(f"✗ FAIL: Transfer should have been blocked!")
     except ValueError as e:
         print(f"✓ PASS: Transfer blocked - {e}")
     
     print_section("TEST 3: Valid Transfer - Correct Custodian (Bob -> Charlie)")
     try:
-        integrity, orig, curr = add_transfer(probe_id, "Officer Bob", "Officer Charlie")
-        print("✓ PASS: Transfer allowed (Bob -> Charlie)")
+        transfer_status, integrity_status, orig, curr = add_transfer(probe_id, "Officer Bob", "Officer Charlie")
+        print(f"✓ PASS: Transfer allowed (Bob -> Charlie) - Status: {transfer_status}")
     except ValueError as e:
         print(f"✗ FAIL: {e}")
     
     print_section("TEST 4: Invalid Transfer - Reverse (Charlie -> Bob)")
     try:
-        integrity, orig, curr = add_transfer(probe_id, "Officer Charlie", "Officer Bob")
+        transfer_status, integrity_status, orig, curr = add_transfer(probe_id, "Officer Charlie", "Officer Bob")
         print(f"✗ FAIL: Reverse transfer should have been blocked!")
     except ValueError as e:
         print(f"✓ PASS: Reverse transfer blocked - {e}")
     
     print_section("TEST 5: Invalid Transfer - Same Person (Charlie -> Charlie)")
     try:
-        integrity, orig, curr = add_transfer(probe_id, "Officer Charlie", "Officer Charlie")
+        transfer_status, integrity_status, orig, curr = add_transfer(probe_id, "Officer Charlie", "Officer Charlie")
         print(f"✗ FAIL: Self-transfer should have been blocked!")
     except ValueError as e:
         print(f"✓ PASS: Self-transfer blocked - {e}")
     
     print_section("TEST 6: Valid Transfer - Continue Chain (Charlie -> Dave)")
     try:
-        integrity, orig, curr = add_transfer(probe_id, "Officer Charlie", "Officer Dave")
-        print("✓ PASS: Transfer allowed (Charlie -> Dave)")
+        transfer_status, integrity_status, orig, curr = add_transfer(probe_id, "Officer Charlie", "Officer Dave")
+        print(f"✓ PASS: Transfer allowed (Charlie -> Dave) - Status: {transfer_status}")
     except ValueError as e:
         print(f"✗ FAIL: {e}")
     
     print_section("TEST 7: Invalid Transfer - Wrong Person (Bob -> Alice)")
     try:
-        integrity, orig, curr = add_transfer(probe_id, "Officer Bob", "Officer Alice")
+        transfer_status, integrity_status, orig, curr = add_transfer(probe_id, "Officer Bob", "Officer Alice")
         print(f"✗ FAIL: Transfer from wrong person should have been blocked!")
     except ValueError as e:
         print(f"✓ PASS: Transfer blocked - {e}")

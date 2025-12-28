@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Demo script: Simulates evidence tampering between transfers.
-Shows how the system detects when a file has been altered.
-"""
-
 import os
 import sys
 from pathlib import Path
@@ -23,12 +17,15 @@ from core.report import generate_text_report
 
 
 def print_section(title):
+    """Print a formatted section header."""
     print(f"\n{'='*60}")
     print(f"  {title}")
     print(f"{'='*60}\n")
 
 
 def demo():
+    """Run the tampering demo."""
+    
     print_section("STEP 1: Initialize Database")
     init_db()
     print("✓ Database initialized")
@@ -61,14 +58,15 @@ def demo():
     
     print_section("STEP 5: Transfer 1 - Alice to Bob (Should be VALID)")
     print("Evidence transferred from Officer Alice to Officer Bob...")
-    integrity_valid_1, hash_at_transfer_1, current_hash_1 = add_transfer(
+    transfer_status_1, integrity_status_1, hash_at_transfer_1, current_hash_1 = add_transfer(
         probe_id, "Officer Alice", "Officer Bob"
     )
     
-    if integrity_valid_1:
-        print("✓ Transfer 1 VALID - Hash matches original")
+    print(f"✓ Transfer Status: {transfer_status_1}")
+    if integrity_status_1:
+        print("✓ Integrity Status: VALID - Hash matches original")
     else:
-        print("✗ Transfer 1 ALTERED - Hash mismatch (unexpected!)")
+        print("✗ Integrity Status: ALTERED - Hash mismatch (unexpected!)")
     
     print(f"  Original Hash:      {original_hash}")
     print(f"  Hash at Transfer 1: {hash_at_transfer_1}")
@@ -100,14 +98,16 @@ def demo():
     
     print_section("STEP 7: Transfer 2 - Bob to Charlie (Should be ALTERED)")
     print("Evidence transferred from Officer Bob to Officer Charlie...")
-    integrity_valid_2, hash_at_transfer_2, current_hash_2 = add_transfer(
+    print("NOTE: Transfer succeeds procedurally despite integrity being ALTERED")
+    transfer_status_2, integrity_status_2, hash_at_transfer_2, current_hash_2 = add_transfer(
         probe_id, "Officer Bob", "Officer Charlie"
     )
     
-    if integrity_valid_2:
-        print("✓ Transfer 2 VALID - Hash matches original (unexpected!)")
+    print(f"✓ Transfer Status: {transfer_status_2} (procedurally successful)")
+    if integrity_status_2:
+        print("✓ Integrity Status: VALID - Hash matches original (unexpected!)")
     else:
-        print("✗ Transfer 2 ALTERED - Hash mismatch DETECTED!")
+        print("✗ Integrity Status: ALTERED - Hash mismatch DETECTED!")
     
     print(f"  Original Hash:      {original_hash}")
     print(f"  Hash at Transfer 2: {hash_at_transfer_2}")

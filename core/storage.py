@@ -1,12 +1,5 @@
-"""
-File storage module for digital evidence.
-Handles secure storage and retrieval of evidence files.
-"""
-
 import os
-import shutil
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 from config import EVIDENCE_DIR
 

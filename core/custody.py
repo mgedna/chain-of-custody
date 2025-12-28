@@ -11,6 +11,7 @@ from core.database import (
     get_users as db_get_users,
     add_transfer as db_add_transfer,
     update_probe_stored_path,
+    check_if_hash_exists,
     check_custody_chain_valid,
     get_valid_next_custodian,
 )
@@ -19,10 +20,12 @@ from core.report import generate_text_report, generate_pdf_report, generate_prob
 from core.storage import store_evidence_file, retrieve_evidence_file, get_evidence_file_size
 from core.audit import log_probe_added, log_user_added, log_transfer, log_integrity_check, log_error
 
+
 def add_probe(filename: str, file_bytes: bytes, uploaded_by: str) -> Tuple[int, str]:
     """
     Add a new digital probe to the custody chain.
     Creates a copy of the file and stores it securely.
+    Captures file metadata for ISO/IEC 27037 compliance.
     
     Args:
         filename: Original filename
@@ -35,11 +38,18 @@ def add_probe(filename: str, file_bytes: bytes, uploaded_by: str) -> Tuple[int, 
     try:
         sha256 = calculate_sha256(file_bytes)
         
+        existing_probe = check_if_hash_exists(sha256)
+        if existing_probe:
+            print(f"Hash already exists in system - Probe ID: {existing_probe}")
+            return existing_probe, sha256
+        
         file_size = len(file_bytes)
-        probe_id = db_add_probe(filename, sha256, uploaded_by, "temp_path", file_size)
+        
+        probe_id = db_add_probe(
+            filename, sha256, uploaded_by, "temp_path", file_size
+        )
         
         stored_path = store_evidence_file(filename, file_bytes, probe_id)
-        
         update_probe_stored_path(probe_id, stored_path)
         
         log_probe_added(filename, probe_id, sha256, file_size)
@@ -78,26 +88,32 @@ def get_current_custodian(probe_id: int) -> Optional[str]:
     """
     return get_valid_next_custodian(probe_id)
 
-def add_transfer(probe_id: int, from_user: str, to_user: str, transfer_reason: str = "") -> Tuple[bool, str, str]:
+def add_transfer(probe_id: int, from_user: str, to_user: str, transfer_reason: str = "", 
+                 transfer_notes: str = "") -> Tuple[str, bool, str, str]:
     """
     Record a custody transfer of a digital probe.
-    Validates custody chain integrity before transfer.
-    Calculates current hash from stored file to detect any alterations.
+    
+    CRITICAL: Transfers succeed regardless of integrity status. Integrity verification
+    is ANALYTICAL (determines if evidence is trustworthy) while transfers are PROCEDURAL
+    (documents responsibility change). Compromised evidence MUST be transferred and
+    documented in the chain of custody.
     
     Args:
         probe_id: Evidence ID
         from_user: Source custodian
         to_user: Destination custodian
-        transfer_reason: Optional reason for transfer (verification, analysis, etc)
+        transfer_reason: Mandatory reason for transfer
+        transfer_notes: Optional investigator notes
     
     Returns:
-        Tuple of (integrity_valid, original_hash, current_hash)
-        - integrity_valid: True if hashes match
+        Tuple of (transfer_status, integrity_status, original_hash, current_hash)
+        - transfer_status: 'SUCCESS' if transfer recorded (always success if chain valid)
+        - integrity_status: True (VALID) or False (ALTERED)
         - original_hash: Original hash when probe was added
         - current_hash: Current hash from stored file
     
     Raises:
-        ValueError: If custody chain is invalid
+        ValueError: Only if custody chain is procedurally invalid
     """
     try:
         is_valid_chain, error_msg = check_custody_chain_valid(probe_id, from_user, to_user)
@@ -119,11 +135,12 @@ def add_transfer(probe_id: int, from_user: str, to_user: str, transfer_reason: s
         current_hash = calculate_sha256(file_bytes)
         integrity_valid = current_hash == original_hash
         
-        db_add_transfer(probe_id, from_user, to_user, current_hash, transfer_reason)
+        db_add_transfer(probe_id, from_user, to_user, current_hash, transfer_reason, 
+                       transfer_notes)
         
         log_transfer(probe_id, from_user, to_user, integrity_valid, current_hash)
         
-        return integrity_valid, original_hash, current_hash
+        return 'SUCCESS', integrity_valid, original_hash, current_hash
     except Exception as e:
         log_error("TRANSFER", str(e))
         raise
@@ -233,3 +250,49 @@ def count_all_probes() -> int:
     from core.database import get_probes
     return len(get_probes())
 
+def can_download_evidence(username: str, user_role: str) -> bool:
+    """Check if user can download evidence files."""
+    return user_role in ['ADMIN', 'INVESTIGATOR']
+
+
+def can_download_reports(username: str, user_role: str) -> bool:
+    """Check if user can download reports."""
+    return True
+
+
+def can_modify_status(username: str, user_role: str) -> bool:
+    """Check if user can modify evidence status."""
+    return user_role in ['ADMIN', 'INVESTIGATOR']
+
+
+def can_sign_transfer(username: str, user_role: str) -> bool:
+    """Check if user can digitally sign transfers."""
+    return True
+
+
+def can_view_all_probes(username: str, user_role: str) -> bool:
+    """Check if user can view all system probes."""
+    return user_role == 'ADMIN'
+
+
+def get_accessible_probes(username: str, user_role: str) -> List:
+    """Get list of probes accessible to user based on role."""
+    if user_role == 'ADMIN':
+        return db_get_probes()
+    else:
+        return get_probes_for_user(username)
+
+
+def generate_user_with_role(username: str, role: str = 'CUSTODIAN') -> None:
+    """
+    Add a new user with a specific role.
+    
+    Args:
+        username: Username
+        role: 'ADMIN', 'INVESTIGATOR', or 'CUSTODIAN' (default)
+    """
+    from core.database import set_user_role
+    
+    db_add_user(username)
+    if role in ['ADMIN', 'INVESTIGATOR', 'CUSTODIAN']:
+        set_user_role(username, role)
