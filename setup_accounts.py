@@ -27,25 +27,41 @@ def setup_demo_accounts():
     print("✓ Database initialized")
     
     demo_accounts = [
-        ("alice", "password123", "Officer Alice"),
-        ("bob", "password456", "Officer Bob"),
-        ("charlie", "password789", "Officer Charlie"),
+        {
+            "email": "alice@forensics.lab",
+            "password": "password123",
+            "username": "Alice",
+            "role": "CUSTODIAN"
+        },
+        {
+            "email": "bob@forensics.lab",
+            "password": "password456",
+            "username": "Bob",
+            "role": "CUSTODIAN"
+        },
+        {
+            "email": "charlie@forensics.lab",
+            "password": "password789",
+            "username": "Charlie",
+            "role": "CUSTODIAN"
+        }
     ]
-    
-    for username, password, display_name in demo_accounts:
-        if create_user_with_password(username, password):
-            print(f"✓ Created account: {username} ({display_name})")
+
+    for account in demo_accounts:
+        if create_user_with_password(account["email"], account["password"], account["username"], account["role"]):
+            print(f"✓ Created account: {account['email']} ({account['username']})")
         else:
-            print(f"⚠ Account may already exist: {username}")
+            print(f"⚠ Account may already exist: {account['email']}")
     
     print("\n" + "="*60)
     print("  Demo Accounts Ready!")
     print("="*60)
     print("\nAccounts created:")
-    for username, password, display_name in demo_accounts:
-        print(f"  Username: {username}")
-        print(f"  Password: {password}")
-        print(f"  Display:  {display_name}")
+    for account in demo_accounts:
+        print(f"  Email:    {account['email']}")
+        print(f"  Username: {account['username']}")
+        print(f"  Password: {account['password']}")
+        print(f"  Role:     {account['role']}")
         print()
     
     print("Start the app with: streamlit run app.py")
