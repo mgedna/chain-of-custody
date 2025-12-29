@@ -85,7 +85,7 @@ def log_transfer(probe_id: int, from_user: str, to_user: str, integrity_valid: b
     log_action("TRANSFER", details, "SUCCESS")
 
 
-def log_integrity_check(probe_id: int, is_valid: Optional[bool], current_hash: str) -> None:
+def log_integrity_check(probe_id: int, is_valid: Optional[bool], current_hash: str, source: str = "") -> None:
     """Log when integrity is verified."""
     if is_valid is None:
         status_text = "NOT_FOUND"
@@ -98,7 +98,7 @@ def log_integrity_check(probe_id: int, is_valid: Optional[bool], current_hash: s
         status = "FAILURE"
     
     details = f"Probe ID: {probe_id}, Status: {status_text}, Hash: {current_hash[:16]}..."
-    log_action("VERIFY_INTEGRITY", details, status)
+    log_action(f"{source}VERIFY_INTEGRITY", details, status)
 
 def log_credential_analysis(probe_id: int, hash_type: str, total_hashes: int, cracked_hashes: int, crack_rate: float) -> None:
     """

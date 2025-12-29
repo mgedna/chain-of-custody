@@ -219,30 +219,48 @@ def get_probe_status(probe_id: int) -> Optional[str]:
     from core.database import get_probe_status as db_get_status
     return db_get_status(probe_id)
 
-def run_integrity_check_all() -> Tuple[List[Tuple], List[str]]:
+def run_integrity_check_all():
     """
     Run automated integrity check on all probes.
+    Logs VERIFY_INTEGRITY events for any altered probes (automatically propagates through chain).
     
     Returns:
         Tuple of (altered_probes, check_summary)
         - altered_probes: List of (probe_id, filename, status, last_hash)
         - check_summary: List of log messages
     """
-    from core.database import verify_all_probes_integrity
+    from core.database import get_probes, get_authoritative_integrity_status
     
-    altered = verify_all_probes_integrity()
+    altered = []
+    probes = get_probes()
     summary = []
     
     summary.append(f"Automated integrity check completed at {datetime.now().isoformat()}")
-    summary.append(f"Total probes checked: {count_all_probes()}")
+    summary.append(f"Total probes checked: {len(probes)}")
+
+    for probe in probes:
+        probe_id = probe[0]
+        filename = probe[1]
+
+        latest_verification = get_authoritative_integrity_status(probe_id)
+
+        if latest_verification == "ALTERED":
+            altered.append({
+                "probe_id": probe_id,
+                "filename": filename,
+                "status": "ALTERED"
+            })
+
+            log_integrity_check(
+                probe_id,
+                is_valid=False,
+                current_hash=probe[2],
+                source="AUTOMATED_"
+            )
     summary.append(f"Altered probes detected: {len(altered)}")
     
-    for probe_id, filename, status, hash_val in altered:
-        msg = f"ALERT: Probe {probe_id} ({filename}) - Status: {status}"
-        summary.append(msg)
-        log_error("INTEGRITY_CHECK", msg)
-    
-    return altered, summary
+    return len(probes), len(altered), altered
+
 
 
 def count_all_probes() -> int:

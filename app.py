@@ -79,9 +79,12 @@ if "user_id" not in st.session_state:
             else:
                 try:
                     display_name = new_username.strip() if new_username.strip() else None
-                    create_user_with_password(new_email.strip(), new_password, display_name, user_role)
-                    st.success(f"✅ Account created successfully!")
-                    st.info(f"Email: **{new_email.strip()}**\nRole: **{user_role}**\n\nYou can now login with your email.")
+                    created = create_user_with_password(new_email.strip(), new_password, display_name, user_role)
+                    if created:
+                        st.success("✅ Account created successfully!")
+                        st.info(f"Email: **{new_email.strip()}**\nRole: **{user_role}**\n\nYou can now login with your email.")
+                    else:
+                        st.error("❌ Account creation failed. Please try again.")
                 except Exception as e:
                     if "UNIQUE constraint failed" in str(e):
                         st.error(f"❌ Email '{new_email.strip()}' already registered")
@@ -453,25 +456,24 @@ if current_module == "6️⃣ Status & Checks":
             from core.custody import run_integrity_check_all
             
             with st.spinner("Checking all probes..."):
-                altered, summary = run_integrity_check_all()
+                total_checked, altered_count, altered_details = run_integrity_check_all()
             
             st.success("✅ Integrity check completed")
             
             st.markdown("#### Check Summary:")
-            for msg in summary:
-                st.write(f"• {msg}")
+            st.write(f"• Total probes checked: {total_checked}")
+            st.write(f"• Altered probes detected: {altered_count}")
             
-            if altered:
-                st.warning(f"⚠️ **{len(altered)} Altered Probes Detected!**")
-                st.markdown("#### Altered Evidence:")
-                for probe_id, filename, status, hash_val in altered:
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        st.error(f"**ID {probe_id}:** {filename} - Status: {status}")
-                    with col2:
-                        st.code(hash_val[:16] + "...")
+            if altered_count > 0:
+                st.error(f"🚨 {altered_count} Altered Probes Detected!")
+
+                for detail in altered_details:
+                    st.error(
+                        f"Probe #{detail['probe_id']}: "
+                        f"{detail['filename']} — {detail['status']}"
+                    )
             else:
-                st.success("✅ All probes verified - No alterations detected")
+                st.success("✅ All probes verified — no alterations detected")
 
 if current_module == "7️⃣ Credential Analysis":
     st.subheader("🔐 Credential Security Analysis")

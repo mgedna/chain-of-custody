@@ -235,18 +235,14 @@ def check_probe_integrity(probe_id: int) -> str:
         conn.close()
 
 
-def get_latest_integrity_verification(probe_id: int) -> Optional[str]:
+def get_authoritative_integrity_status(probe_id: int) -> Optional[str]:
     """
-    Get the most recent VERIFY_INTEGRITY result from the audit log.
+    Get authoritative integrity status for a probe.
     
-    CRITICAL: This returns the actual verification result (VALID/ALTERED) from the
-    audit log, not a calculated status. This is the authoritative integrity status
-    based on explicit verification checks.
-    
-    Returns:
-        "VALID" - if latest VERIFY_INTEGRITY check showed valid
-        "ALTERED" - if latest VERIFY_INTEGRITY check showed altered
-        None - if no verification checks have been performed
+    FORENSIC RULE:
+    - If ANY VERIFY_INTEGRITY FAILURE exists → ALTERED (irreversible)
+    - Else if latest check is SUCCESS → VALID
+    - Else → None (no checks performed)
     """
     conn = get_connection()
     try:
@@ -255,15 +251,28 @@ def get_latest_integrity_verification(probe_id: int) -> Optional[str]:
         cur.execute("""
             SELECT status
             FROM audit_log
-            WHERE action = 'VERIFY_INTEGRITY' AND details LIKE ?
+            WHERE action = 'VERIFY_INTEGRITY'
+            AND status = 'FAILURE'
+            AND details LIKE ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (f'Probe ID: {probe_id}%',))
+        
+        if cur.fetchone():
+            return "ALTERED"
+        
+        cur.execute("""
+            SELECT status
+            FROM audit_log
+            WHERE action = 'VERIFY_INTEGRITY'
+              AND details LIKE ?
             ORDER BY timestamp DESC
             LIMIT 1
         """, (f'Probe ID: {probe_id}%',))
         
         result = cur.fetchone()
-        if result:
-            status = result[0]
-            return "VALID" if status == "SUCCESS" else "ALTERED"
+        if result and result[0] == "SUCCESS":
+            return "VALID"
         
         return None
     finally:
@@ -490,7 +499,8 @@ def add_transfer_with_reason(probe_id: int, from_user: str, to_user: str, sha256
 def verify_all_probes_integrity() -> List[Tuple[int, str, str, str]]:
     """
     Automated integrity check on all probes.
-    Returns list of (probe_id, filename, status, last_transfer_hash) for ones that failed
+    Checks both: 1) VERIFY_INTEGRITY events in audit log, 2) Hash comparisons
+    Returns list of (probe_id, filename, status, last_hash) for ones that are ALTERED
     """
     conn = get_connection()
     try:
@@ -506,6 +516,21 @@ def verify_all_probes_integrity() -> List[Tuple[int, str, str, str]]:
         results = []
         for row in cur.fetchall():
             probe_id, filename, original_hash, last_transfer_hash = row
+            
+            cur.execute("""
+                SELECT 1 FROM audit_log
+                WHERE action = 'VERIFY_INTEGRITY'
+                AND status = 'FAILURE'
+                AND details LIKE ?
+                LIMIT 1
+            """, (f'Probe ID: {probe_id}%',))
+            
+            verification_result = cur.fetchone()
+            if verification_result:
+                status = verification_result[0]
+                if status == "FAILURE":
+                    results.append((probe_id, filename, "ALTERED", last_transfer_hash or original_hash))
+                continue
             
             if last_transfer_hash is None:
                 continue

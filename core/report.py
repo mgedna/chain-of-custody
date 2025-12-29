@@ -388,7 +388,7 @@ def generate_probe_pdf_report(probe_id: int) -> bytes:
     from reportlab.lib.units import inch
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
     from io import BytesIO
-    from core.database import get_probe_report_data, check_probe_integrity, get_latest_integrity_verification, get_probe_integrity_timeline, get_integrity_compromise_interval
+    from core.database import get_probe_report_data, check_probe_integrity, get_authoritative_integrity_status, get_probe_integrity_timeline, get_integrity_compromise_interval
     
     probe, transfers = get_probe_report_data(probe_id)
     
@@ -405,7 +405,7 @@ def generate_probe_pdf_report(probe_id: int) -> bytes:
     
     story.append(Paragraph("Evidence Information", styles['Heading2']))
     
-    latest_verification = get_latest_integrity_verification(probe_id)
+    latest_verification = get_authoritative_integrity_status(probe_id)
     if latest_verification is not None:
         integrity_status = latest_verification
     else:
@@ -655,4 +655,3 @@ def generate_probe_pdf_report(probe_id: int) -> bytes:
     doc.build(story)
     pdf_buffer.seek(0)
     return pdf_buffer.getvalue()
-
