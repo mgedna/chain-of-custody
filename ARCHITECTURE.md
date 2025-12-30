@@ -2,463 +2,841 @@
 
 ## Overview
 
-Digital Chain of Custody is built with a **layered architecture** separating concerns into distinct modules for maintainability, testability, and security.
+The Digital Chain of Custody system is built with a modular architecture that separates concerns into distinct layers: presentation (Streamlit UI), business logic (core modules), data persistence (SQLite), and file storage.
 
 ## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   STREAMLIT UI (app.py)                     │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  • Login Page (auth.py)                              │   │
-│  │  • Tab 1: Add Evidence                               │   │
-│  │  • Tab 2: Custody Transfer (with transfer reason)    │   │
-│  │  • Tab 3: Integrity Check                            │   │
-│  │  • Tab 4: Report Generation (per-evidence + overall) │   │
-│  │  • Tab 5: Audit Log Display                          │   │
-│  │  • Tab 6: Status Management & Auto Checks            │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────────┐
-│               ORCHESTRATION LAYER (custody.py)              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Business Logic:                                     │   │
-│  │  • add_probe() - Register evidence with status       │   │
-│  │  • add_transfer() - Transfer with reason & validation│   │
-│  │  • verify_integrity() - Check tampering              │   │
-│  │  • update_probe_status() - Lifecycle management      │   │
-│  │  • run_integrity_check_all() - NIST auto checks      │   │
-│  │  • get_audit_log() - Retrieve audit trail            │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-      ↙        ↓        ↓        ↓        ↓         ↓
-┌───────────┐┌────────────┐┌──────────┐┌──────────┐┌────────┐┌──────────┐
-│ auth.py   ││database.py ││storage.py││hashing.py││audit.py││report.py │
-├───────────┤├────────────┤├──────────┤├──────────┤├────────┤├──────────┤
-│•Login     ││•SQLite     ││•Files    ││•SHA256   ││•Log    ││•PDF/TXT  │
-│•Passwords ││•Status     ││•Copy     ││•Verify   ││•Alert  ││•Per-probe│
-│•Sessions  ││•Lifecycle  ││•Paths    ││•Utils    ││•Track  ││•Reports  │
-└───────────┘└────────────┘└──────────┘└──────────┘└────────┘└──────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     PRESENTATION LAYER                       │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │              Streamlit Web Interface (app.py)          │  │
+│  │                                                        │  │
+│  │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐       │  │
+│  │  │Login│ │Add  │ │Trans│ │Check│ │Reprt│ │Audit│       │  │
+│  │  │     │ │Evid.│ │ fer │ │Integ│ │     │ │ Log │       │  │
+│  │  └─────┘ └─────┘ └─────┘ └─────┘ └─────┘ └─────┘       │  │
+│  │  ┌─────┐ ┌─────┐                                       │  │
+│  │  │Statu│ │Cred.│                                       │  │
+│  │  │ s   │ │Analy│                                       │  │
+│  │  └─────┘ └─────┘                                       │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+                           │
+                           │ Function Calls
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    BUSINESS LOGIC LAYER                      │
+│                        (core/*.py)                           │
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│  │   auth   │  │ custody  │  │ hashing  │  │ storage  │      │
+│  │   .py    │  │   .py    │  │   .py    │  │   .py    │      │
+│  │          │  │          │  │          │  │          │      │
+│  │• Email   │  │• Add     │  │• SHA-256 │  │• Save    │      │
+│  │  login   │  │  probe   │  │  hash    │  │  files   │      │
+│  │• Role-   │  │• Transfer│  │• Verify  │  │• Load    │      │
+│  │  based   │  │• Validate│  │  hash    │  │  files   │      │
+│  │• PBKDF2  │  │  chain   │  │          │  │          │      │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘      │
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                    │
+│  │  audit   │  │  report  │  │ analysis │                    │
+│  │   .py    │  │   .py    │  │   .py    │                    │
+│  │          │  │          │  │          │                    │
+│  │• TRANSFER│  │• TXT gen │  │• Hashcat │                    │
+│  │• VERIFY_ │  │• PDF gen │  │  integr. │                    │
+│  │  INTEGR. │  │• Timeline│  │• Working │                    │
+│  │• ANALYSIS│  │• Interval│  │  copy    │                    │
+│  └──────────┘  └──────────┘  └──────────┘                    │
+└──────────────────────────────────────────────────────────────┘
+                           │
+                           │ SQL Queries
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     DATA LAYER                               │
+│                    (core/database.py)                        │
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐     │
+│  │  users   │  │  probes  │  │transfers │  │audit_log  │     │
+│  │          │  │          │  │          │  │           │     │
+│  │• email   │  │• filename│  │• from_   │  │• timestamp│     │
+│  │• username│  │• sha256  │  │  user    │  │• user_    │     │
+│  │• pwd_hash│  │• status  │  │• to_user │  │  email    │     │
+│  │• role    │  │• uploaded│  │• reason  │  │• action   │     │
+│  │          │  │  _by     │  │• sha256  │  │• status   │     │
+│  └──────────┘  └──────────┘  └──────────┘  └───────────┘     │
+│                                                              │
+│                    SQLite3 Database                          │
+│                    (db/chain.db)                             │
+└──────────────────────────────────────────────────────────────┘
+                           │
+                           │ File I/O
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    STORAGE LAYER                             │
+│                                                              │
+│  evidence/                                                   │
+│  ├── probe_1_<timestamp>.<ext>                               │ 
+│  ├── probe_2_<timestamp>.<ext>                               │
+│  └── probe_N_<timestamp>.<ext>                               │
+│                                                              │
+│  /tmp/ (for credential analysis)                             │
+│  ├── hashcat_work_<uuid>/                                    │
+│  │   ├── hashes.txt                                          │
+│  │   ├── wordlist.txt                                        │
+│  │   └── potfile.pot                                         │
+│  └── (cleaned up after analysis)                             │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## Layer Descriptions
+## Core Components
 
-### 1. **UI Layer** (`app.py`)
-- **Purpose**: User interface and user interaction
-- **Technology**: Streamlit with 6 tabs
-- **Responsibilities**:
-  - Display login page with registration
-  - Render 6 tabs for different operations
-  - Handle user input and form validation
-  - Display results and messages
-  - Session state management
-  - Page refresh after critical actions
+### 1. Presentation Layer (app.py)
 
-### 2. **Orchestration Layer** (`custody.py`)
-- **Purpose**: Business logic and workflow coordination
-- **Responsibilities**:
-  - Validate custody chain rules
-  - Coordinate between modules
-  - Handle errors and logging
-  - Return results to UI layer
-  - **NEW**: Status lifecycle management
-  - **NEW**: Automated integrity verification
-- **Key Functions**:
-  - `add_probe()` - Upload and register evidence with status RECEIVED
-  - `add_transfer()` - Perform custody transfer with **transfer reason** and validation
-  - `verify_integrity()` - Check evidence tampering
-  - `update_probe_status()` - Update lifecycle status
-  - `run_integrity_check_all()` - **NIST-compliant automated check**
-  - `get_current_custodian()` - Get who has evidence now
-  - `get_audit_log()` - Retrieve audit trail
+**Purpose**: User interface and workflow orchestration
 
-### 3. **Service Layers** (Specific modules)
+**Key Features**:
+* **Session Management**: Tracks authenticated user via `st.session_state`
+* **7 Main Tabs**:
+  1. **Login/Register** - Email-based authentication with role selection
+  2. **Add Evidence** - File upload with automatic hashing
+  3. **Custody Transfer** - Chain validation and transfer recording
+  4. **Integrity Check** - Manual verification with VERIFY_INTEGRITY event generation
+  5. **Report** - PDF/TXT generation with integrity timeline
+  6. **Audit Log** - Real-time action viewing with event type filtering
+  7. **Status Management** - Lifecycle updates and automated integrity checks
+  8. **Credential Analysis** - Optional hash cracking module
 
-#### **auth.py** - User Authentication
-- **Purpose**: Handle user authentication and session management
-- **Functions**:
-  - `authenticate_user(username, password)` - Login
-  - `hash_password(password)` - Secure password storage
-  - `verify_password(password, hash)` - Compare passwords
-  - `create_user_with_password(username, password)` - Create account
-  - `get_user_by_id(user_id)` - Get username
+**Technologies**:
+* Streamlit 1.40.0 for reactive UI
+* Session state for authentication persistence
+* File uploader widgets for evidence/hash files
+* Selectboxes with smart filtering (chain validation)
 
-#### **database.py** - Data Persistence
-- **Purpose**: All database operations
-- **Technology**: SQLite3
-- **Tables**:
-  - `users` - Custodian accounts with password hashes
-  - `probes` - Evidence files metadata
-  - `transfers` - Custody transfer history
-  - `audit_log` - System action logs
-- **Key Functions**:
-  - `add_probe()` - Insert evidence
-  - `add_transfer()` - Record transfer
-  - `get_probe_details()` - Retrieve evidence info
-  - `check_custody_chain_valid()` - Validate transfer rules
-  - `get_valid_next_custodian()` - Get current custodian
+### 2. Authentication Layer (core/auth.py)
 
-#### **storage.py** - File System Operations
-- **Purpose**: Manage evidence file storage
-- **Location**: `evidence/` directory
-- **Functions**:
-  - `store_evidence_file()` - Save copy with timestamp
-  - `retrieve_evidence_file()` - Load file for verification
-  - `get_evidence_file_size()` - Get file size
-- **Naming**: `probe_{ID}_{TIMESTAMP}.{EXT}`
+**Purpose**: User identity management with email-based authentication
 
-#### **hashing.py** - Cryptography
-- **Purpose**: Cryptographic operations
-- **Algorithm**: SHA-256
-- **Functions**:
-  - `calculate_sha256(file_bytes)` - Hash calculation
-  - `verify_file_integrity()` - Compare hashes
-  - `compare_hashes()` - Hash comparison with details
+**Key Functions**:
 
-#### **audit.py** - Audit Logging
-- **Purpose**: Track all system actions
-- **Status Values**: SUCCESS, WARNING, FAILURE
-- **Functions**:
-  - `log_action()` - Core logging
-  - `log_probe_added()` - Evidence added
-  - `log_transfer()` - Custody transfer
-  - `log_integrity_check()` - Verification
-  - `get_audit_log()` - Retrieve logs
+```python
+def hash_password(password: str) -> str
+    """PBKDF2 with SHA-256, 100,000 iterations"""
 
-#### **report.py** - Report Generation
-- **Purpose**: Generate professional reports
-- **Formats**: TXT, PDF
-- **Functions**:
-  - `generate_text_report()` - Plain text output
-  - `generate_pdf_report()` - Styled PDF with tables
-  - `generate_pdf_report_bytes()` - Return PDF bytes
+def verify_password(password: str, stored_hash: str) -> bool
+    """Constant-time comparison"""
 
-## Database Schema Details
+def create_user_with_password(email: str, password: str, username: str, role: str) -> bool
+    """Create user with email, optional username, role (ADMIN/INVESTIGATOR/CUSTODIAN)"""
 
-### Table: `probes`
-```
-Column             | Type      | Details
--------------------|-----------|------------------------------------------
-id                 | INTEGER   | PRIMARY KEY
-filename           | TEXT      | Original file name
-sha256             | TEXT      | Initial cryptographic hash
-created_at         | TIMESTAMP | Evidence registration time
-stored_path        | TEXT      | Path to stored copy on disk
-file_size          | INTEGER   | File size in bytes
-uploaded_by        | TEXT      | FK to users.name - who uploaded
-status             | TEXT      | RECEIVED|IN_ANALYSIS|VERIFIED|RELEASED|ARCHIVED
-status_updated_at  | TIMESTAMP | When status last changed
+def authenticate_user(email: str, password: str) -> Optional[Tuple[int, str]]
+    """Returns (user_id, username) or None"""
 ```
 
-**Status Lifecycle** (ISO/IEC 27037 compliance):
-- `RECEIVED` - Evidence intake, default status
-- `IN_ANALYSIS` - Currently being examined
-- `VERIFIED` - Integrity confirmed
-- `RELEASED` - Released to stakeholders
-- `ARCHIVED` - Case closed/long-term storage
+**Security Features**:
+* PBKDF2-SHA256 with 100,000 iterations (NIST recommended)
+* Email-based unique identification
+* Role-based access control preparation (ADMIN/INVESTIGATOR/CUSTODIAN)
+* Constant-time password comparison (timing attack prevention)
 
-### Table: `users`
-```
-Column        | Type | Details
---------------|------|------------------------------------------
-id            | INT  | PRIMARY KEY
-name          | TEXT | UNIQUE username
-password_hash | TEXT | PBKDF2 hash (100,000 iterations)
-```
-
-### Table: `transfers`
-```
-Column             | Type      | Details
--------------------|-----------|------------------------------------------
-id                 | INTEGER   | PRIMARY KEY
-probe_id           | INTEGER   | FK to probes.id
-from_user          | TEXT      | FK to users.name
-to_user            | TEXT      | FK to users.name
-sha256_at_transfer | TEXT      | Hash at transfer time (NIST requirement)
-timestamp          | TIMESTAMP | Transfer execution time
-transfer_reason    | TEXT      | **NEW - Mandatory reason for transfer (NIST)**
+**Database Schema**:
+```sql
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    username TEXT,
+    password_hash TEXT NOT NULL,
+    role TEXT DEFAULT 'CUSTODIAN'
+);
 ```
 
-**Transfer Reason** (NIST SP 800-86 requirement):
-- Documents PURPOSE of evidence transfer
-- Examples: "Initial investigation", "Lab analysis", "Verification"
-- Mandatory field - prevents unauthorized transfers
-- Audit trail shows intent of each handoff
+### 3. Custody Management (core/custody.py)
 
-### Table: `audit_log`
-```
-Column   | Type      | Details
----------|-----------|------------------------------------------
-id       | INTEGER   | PRIMARY KEY
-timestamp| TIMESTAMP | Action time (ISO format)
-action   | TEXT      | add_probe, transfer, verify_integrity, etc
-details  | TEXT      | Detailed action information
-status   | TEXT      | SUCCESS, WARNING, or FAILURE
-error_msg| TEXT      | Error details if FAILURE
+**Purpose**: Business logic for evidence handling and chain validation
+
+**Key Functions**:
+
+```python
+def add_probe(filename: str, file_bytes: bytes, uploaded_by: str) -> tuple
+    """Register evidence with RECEIVED status"""
+
+def add_transfer(probe_id: int, from_user: str, to_user: str, reason: str) -> tuple
+    """
+    Record custody transfer with:
+    - Chain validation (custody continuity, no reverse transfers)
+    - Hash verification at transfer time
+    - Transfer ALWAYS succeeds (procedural requirement)
+    - Integrity status tracked separately (VALID/ALTERED)
+    """
+
+def validate_custody_chain(probe_id: int, from_user: str, to_user: str) -> tuple
+    """
+    Validate transfer is allowed:
+    - from_user must be current custodian
+    - to_user cannot be same as from_user
+    - No A→B→A reverse transfers (NIST standard)
+    Returns: (is_valid, error_message)
+    """
+
+def verify_integrity(probe_id: int, file_bytes: bytes) -> tuple
+    """
+    Manual integrity verification with VERIFY_INTEGRITY event generation:
+    - Compares uploaded file hash with original
+    - Returns (is_valid, current_hash)
+    - Generates VERIFY_INTEGRITY SUCCESS/FAILURE event
+    - FAILURE events permanently mark evidence as ALTERED
+    """
+
+def get_authoritative_integrity_status(probe_id: int) -> Optional[str]
+    """
+    Get definitive integrity status:
+    - Checks entire audit_log for ANY VERIFY_INTEGRITY FAILURE
+    - If ANY failure found → ALTERED (irreversible)
+    - Else if latest check SUCCESS → VALID
+    - Else → None (no checks performed)
+    """
+
+def run_integrity_check_all() -> tuple
+    """
+    Automated system-wide integrity check:
+    - Checks all probes using authoritative integrity status
+    - Creates AUTOMATED_VERIFY_INTEGRITY FAILURE events for altered probes
+    - Returns (total_checked, altered_count, altered_details)
+    """
+
+def update_probe_status(probe_id: int, new_status: str, reason: str, user_email: str) -> bool
+    """Update evidence lifecycle status with audit trail"""
+
+def get_current_custodian(probe_id: int) -> Optional[str]
+    """Get current holder of evidence"""
 ```
 
-## Data Flow
+**Chain Validation Rules**:
+1. **Custody Continuity**: Only current custodian can transfer
+2. **No Self-Transfer**: Cannot transfer to yourself
+3. **No Reverse Transfers**: Cannot go A→B→A (NIST compliance)
+4. **Linear Chain**: Must maintain proper sequence
 
-### Evidence Upload Flow
+**Integrity Status Logic**:
 ```
-User Upload
+TRANSFER vs INTEGRITY STATUS:
+├─ Transfer Action (Procedural)
+│  ├─ Validates: custody chain rules
+│  ├─ Records: from_user, to_user, reason, hash
+│  └─ Always: SUCCESS (procedural documentation)
+│
+└─ Integrity Status (Forensic)
+   ├─ Tracked: separately from transfer
+   ├─ Calculated: at transfer time via hash comparison
+   └─ Values:
+      ├─ VALID: hash matches original
+      └─ ALTERED: hash differs OR VERIFY_INTEGRITY FAILURE exists
+
+VERIFY_INTEGRITY Event:
+├─ Manual Check (Tab 3)
+│  ├─ User uploads file
+│  ├─ System compares hash
+│  └─ Creates event: SUCCESS or FAILURE
+│
+├─ Automated Check (Tab 6)
+│  ├─ System checks all probes
+│  ├─ Uses authoritative status
+│  └─ Creates AUTOMATED_VERIFY_INTEGRITY FAILURE for altered probes
+│
+└─ FAILURE Impact:
+   ├─ Marks evidence ALTERED permanently
+   ├─ Status is irreversible (forensic principle)
+   └─ Future checks always return ALTERED
+```
+
+### 4. Cryptographic Operations (core/hashing.py)
+
+**Purpose**: Evidence integrity verification
+
+**Key Functions**:
+
+```python
+def hash_file(file_bytes: bytes) -> str
+    """SHA-256 hash generation"""
+
+def verify_hash(file_bytes: bytes, expected_hash: str) -> bool
+    """Hash comparison"""
+```
+
+**Algorithm**: SHA-256 (NIST FIPS 180-4)
+* 256-bit output
+* Collision-resistant
+* Pre-image resistant
+* Second pre-image resistant
+
+### 5. File Storage (core/storage.py)
+
+**Purpose**: Secure evidence file management
+
+**Key Functions**:
+
+```python
+def save_file(file_bytes: bytes, filename: str, probe_id: int) -> str
+    """Store evidence with cryptographic naming"""
+
+def load_file(stored_path: str) -> bytes
+    """Retrieve evidence"""
+
+def file_exists(stored_path: str) -> bool
+    """Check existence"""
+```
+
+**Naming Convention**: `probe_{probe_id}_{timestamp}.{extension}`
+
+**Storage Structure**:
+```
+evidence/
+├── probe_1_20251230_101050.txt
+├── probe_2_20251230_102315.jpg
+├── probe_3_20251230_103422.pdf
+└── probe_N_<timestamp>.<ext>
+```
+
+### 6. Audit Trail (core/audit.py)
+
+**Purpose**: Comprehensive system logging with event types
+
+**Key Functions**:
+
+```python
+def log_action(action: str, details: str, status: str, user_email: str = None)
+    """
+    Generic audit logging with user identification
+    Status: SUCCESS, WARNING, FAILURE
+    """
+
+def log_probe_added(probe_id: int, filename: str, sha256: str, user_email: str)
+    """Log evidence registration"""
+
+def log_user_added(email: str, role: str)
+    """Log account creation"""
+
+def log_transfer(probe_id: int, from_user: str, to_user: str, integrity_valid: bool, current_hash: str)
+    """
+    Log custody transfer
+    CRITICAL: Status is ALWAYS SUCCESS (procedural requirement)
+    Integrity status (VALID/ALTERED) is separate and informational
+    """
+
+def log_integrity_check(probe_id: int, is_valid: Optional[bool], current_hash: str, source: str = "")
+    """
+    Log integrity verification
+    Action: VERIFY_INTEGRITY or AUTOMATED_VERIFY_INTEGRITY
+    Status: SUCCESS (valid) or FAILURE (altered)
+    FAILURE permanently marks evidence as ALTERED
+    """
+
+def log_credential_analysis(probe_id: int, hash_type: str, total_hashes: int, cracked_hashes: int, crack_rate: float)
+    """
+    Log credential analysis
+    Action: ANALYSIS
+    Note: Non-procedural, does not affect chain of custody
+    """
+
+def log_error(action: str, error_msg: str)
+    """Log system errors"""
+```
+
+**Event Types**:
+* **PROBE_ADDED**: Evidence registration
+* **TRANSFER**: Custody transfer (always SUCCESS, integrity separate)
+* **VERIFY_INTEGRITY**: Manual integrity check (SUCCESS/FAILURE)
+* **AUTOMATED_VERIFY_INTEGRITY**: System-wide check (FAILURE for altered probes)
+* **ANALYSIS**: Credential analysis (non-procedural)
+* **STATUS_UPDATE**: Evidence lifecycle change
+* **USER_ADDED**: Account creation
+
+**Audit Log Schema**:
+```sql
+CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_email TEXT,
+    action TEXT NOT NULL,
+    details TEXT,
+    status TEXT,
+    error_msg TEXT
+);
+```
+
+### 7. Report Generation (core/report.py)
+
+**Purpose**: Professional forensic reporting
+
+**Key Functions**:
+
+```python
+def generate_overall_report_text() -> str
+    """Plain text system-wide report"""
+
+def generate_overall_report_pdf() -> bytes
+    """PDF system-wide report"""
+
+def generate_probe_report_text(probe_id: int) -> str
+    """
+    Per-evidence text report including:
+    - Evidence details
+    - Transfer history
+    - Authoritative integrity status
+    - Integrity timeline (when compromised)
+    - Compromise interval (narrowed window)
+    - Credential analysis results
+    """
+
+def generate_probe_pdf_report(probe_id: int) -> bytes
+    """
+    Professional PDF report with:
+    - Styled tables
+    - Integrity status indicators
+    - Timeline of compromise
+    - Interval of tampering
+    - Analysis summary
+    """
+
+def get_probe_integrity_timeline(probe_id: int) -> List[dict]
+    """
+    Returns chronological integrity status changes:
+    [
+        {"timestamp": "...", "action": "TRANSFER", "status": "VALID"},
+        {"timestamp": "...", "action": "VERIFY_INTEGRITY", "status": "FAILURE"},
+        {"timestamp": "...", "action": "AUTOMATED_VERIFY_INTEGRITY", "status": "FAILURE"}
+    ]
+    """
+
+def get_integrity_compromise_interval(probe_id: int) -> Optional[Tuple[str, str]]
+    """
+    Returns (start_time, end_time) of when tampering occurred:
+    - start_time: Last known VALID timestamp
+    - end_time: First ALTERED timestamp
+    - Narrows window of when evidence was compromised
+    """
+```
+
+**Report Features**:
+* ReportLab PDF generation
+* Professional styling with tables
+* Status indicators (✓ VALID, ✗ ALTERED)
+* Integrity timeline visualization
+* Compromise interval calculation
+* Credential analysis integration
+* Chain of custody visualization
+
+### 8. Credential Analysis (core/analysis.py)
+
+**Purpose**: Optional password hash cracking for security assessment
+
+**Key Functions**:
+
+```python
+def validate_hash_format(hashes: List[str], hash_type: str) -> Tuple[bool, str]
+    """Validate hashes match expected format for type"""
+
+def create_working_copy(hash_file_content: str) -> str
+    """
+    Create temporary copy for analysis
+    PRINCIPLE: Original evidence never touched
+    """
+
+def cleanup_working_copy(temp_dir: str) -> None
+    """Remove temporary analysis files"""
+
+def run_hashcat_analysis(temp_dir: str, hash_type: str, wordlist_path: Optional[str]) -> Tuple[bool, int, int]
+    """
+    Execute Hashcat analysis on working copy
+    Returns: (success, total_hashes, cracked_count)
+    """
+
+def parse_analysis_results(total_hashes: int, cracked_count: int) -> dict
+    """
+    Format analysis results
+    SECURITY: Returns statistics only, never plaintext passwords
+    """
+
+def generate_findings_summary(total_hashes: int, cracked_count: int) -> str
+    """
+    Generate security assessment:
+    - 0% cracked: Strong credential protection
+    - <10%: Good credential protection
+    - <50%: Moderate credential protection
+    - ≥50%: Weak credential protection
+    """
+
+def perform_analysis(hash_file_content: str, hash_type: str, wordlist_path: Optional[str]) -> Tuple[bool, dict]
+    """
+    Complete analysis workflow:
+    1. Validate hash format
+    2. Create working copy
+    3. Run Hashcat
+    4. Parse results
+    5. Clean up working copy
+    6. Return statistics
+    """
+```
+
+**Supported Hash Types**:
+* MD5 (0)
+* MD5_SALTED (10)
+* SHA1 (100)
+* SHA256 (1400)
+* SHA256_SALTED (1710)
+* BCRYPT (3200)
+* SCRYPT (8900)
+* NTLM (1000)
+* LM (3000)
+* Windows (1000)
+* Linux (1800)
+* PDF (10500)
+
+**Analysis Workflow**:
+```
+User uploads hash file
     ↓
-add_probe() [custody.py]
-    ├→ calculate_sha256() [hashing.py]
-    ├→ db_add_probe() [database.py]
-    ├→ store_evidence_file() [storage.py]
-    ├→ update_probe_stored_path() [database.py]
-    └→ log_probe_added() [audit.py]
-```
-
-### Custody Transfer Flow
-```
-User Selection
+Validate hash format
     ↓
-add_transfer() [custody.py]
-    ├→ check_custody_chain_valid() [database.py]
-    │  ├→ get_last_transfer() [database.py]
-    │  └→ Validate rules
-    ├→ retrieve_evidence_file() [storage.py]
-    ├→ calculate_sha256() [hashing.py]
-    ├→ Compare hashes
-    ├→ db_add_transfer() [database.py]
-    └→ log_transfer() [audit.py]
-```
-
-### Integrity Check Flow
-```
-User Re-Upload
+Create working copy in /tmp/
     ↓
-verify_integrity() [custody.py]
-    ├→ calculate_sha256() [hashing.py]
-    ├→ get_probe_hash() [database.py]
-    ├→ verify_file_integrity() [hashing.py]
-    └→ log_integrity_check() [audit.py]
-```
-
-### Status Lifecycle Flow (NEW - NIST Compliance)
-```
-Evidence Registered
-    ↓ (status: RECEIVED)
-update_probe_status() [custody.py]
-    ├→ db_update_probe_status() [database.py]
-    ├→ Record status change timestamp
-    ├→ Transition through states
-    │  ├→ IN_ANALYSIS (examination)
-    │  ├→ VERIFIED (integrity confirmed)
-    │  ├→ RELEASED (to stakeholders)
-    │  └→ ARCHIVED (case closed)
-    └→ log_status_change() [audit.py]
-```
-
-### Automated Integrity Check Flow (NEW - NIST SP 800-86)
-```
-User Initiates Full Check
+Run Hashcat on working copy
     ↓
-run_integrity_check_all() [custody.py]
-    ├→ get_all_probes() [database.py]
-    ├→ For each probe:
-    │  ├→ retrieve_evidence_file() [storage.py]
-    │  ├→ calculate_sha256() [hashing.py]
-    │  ├→ Compare with stored hash
-    │  ├→ Mark as VALID or ALTERED
-    │  └→ Log result [audit.py]
-    ├→ Return altered_probes list
-    ├→ Return summary messages
-    └→ Alert user if tampering detected
+Parse potfile (cracked hashes)
+    ↓
+Calculate statistics:
+  - Total hashes
+  - Cracked count
+  - Crack rate %
+  - Security assessment
+    ↓
+Clean up working copy
+    ↓
+Log ANALYSIS event
+    ↓
+Return statistics (no plaintext)
 ```
 
-## Validation Rules
+**Security Principles**:
+* **Original Evidence Untouched**: Analysis on temporary copies only
+* **No Plaintext Storage**: Only statistics returned
+* **Sandboxed Execution**: Working directory isolated
+* **Cleanup Guaranteed**: `try/finally` ensures temp files removed
+* **Non-Procedural**: Does not affect chain of custody
+* **Audit Logged**: All analysis logged as ANALYSIS events
 
-### Chain of Custody Validation (`check_custody_chain_valid`)
+### 9. Database Layer (core/database.py)
 
-1. **Custody Continuity**
-   - Only current custodian can transfer
-   - Extracted from `get_last_transfer()`
-   - Error: "Only X can transfer this evidence"
+**Purpose**: Data persistence and retrieval
 
-2. **No Reverse Transfers** (NIST Standard)
-   - Cannot transfer back to previous custodian
-   - Prevents: A→B→A pattern
-   - Error: "Cannot reverse transfer: evidence just came from X"
-   - **NIST Compliance**: Prevents unauthorized return of evidence
+**Key Functions**:
 
-3. **No Self-Transfers**
-   - Cannot transfer to same person
-   - Error: "Cannot transfer to the same person"
+```python
+def init_db()
+    """Initialize database with schema including roles"""
 
-4. **Transfer Reason Required** (NIST SP 800-86)
-   - **NEW**: Mandatory transfer_reason field
-   - Documents PURPOSE of custody transfer
-   - Examples: "Initial investigation", "Lab analysis", "Chain verification"
-   - UI enforces non-empty field
-   - Stored in transfers table for audit trail
-   - Error: "Transfer reason is required"
-   - **Forensic Value**: Creates record of intent for each handoff
+def get_connection() -> sqlite3.Connection
+    """Get thread-safe connection"""
 
-## Standards Compliance
+def add_probe_to_db(filename: str, sha256: str, stored_path: str, file_size: int, uploaded_by: str) -> int
+    """Insert evidence with RECEIVED status"""
 
-### NIST SP 800-86 (Digital Evidence) Implementation
+def add_transfer_with_reason(probe_id: int, from_user: str, to_user: str, sha256_at_transfer: str, reason: str)
+    """Record transfer with mandatory reason"""
 
-**1. Evidence Status Lifecycle** (Section 3.4)
-- Five-state model: RECEIVED → IN_ANALYSIS → VERIFIED → RELEASED/ARCHIVED
-- Stored in `probes.status` with timestamp tracking
-- UI Tab 6 provides status management interface
-- Audit trail records all status transitions
+def get_current_custodian(probe_id: int) -> Optional[str]
+    """Get latest to_user from transfers"""
 
-**2. Transfer Documentation** (Section 3.3)
-- Mandatory `transfer_reason` field in transfers table
-- Documents PURPOSE of each custody transfer
-- NIST requirement: "Document chain of custody with sufficient detail"
-- Supports forensic investigation and legal requirements
+def get_previous_transfers(probe_id: int, current_user: str) -> List[str]
+    """Get users in transfer chain (for reverse transfer validation)"""
 
-**3. Automated Integrity Verification** (Section 3.2)
-- `run_integrity_check_all()` performs system-wide verification
-- SHA-256 hash comparison against stored values
-- Detects tampering: VALID vs ALTERED status
-- Audit logging of all check results
-- Supports NIST requirement: "Preserve integrity of evidence"
+def check_probe_integrity(probe_id: int) -> str
+    """
+    Check if probe integrity compromised
+    Returns: VALID, ALTERED, or NO_TRANSFERS
+    Note: This checks hash comparison at transfers, not VERIFY_INTEGRITY events
+    """
 
-### ISO/IEC 27037 (Digital Evidence Handling) Implementation
+def get_authoritative_integrity_status(probe_id: int) -> Optional[str]
+    """
+    Get definitive integrity status
+    FORENSIC RULE:
+    - If ANY VERIFY_INTEGRITY FAILURE exists → ALTERED (irreversible)
+    - Else if latest check is SUCCESS → VALID
+    - Else → None (no checks performed)
+    
+    This is the AUTHORITATIVE source of integrity status
+    """
 
-**Evidence Lifecycle**:
-- Receipt: Status RECEIVED + timestamp
-- Examination: Status IN_ANALYSIS
-- Conclusion: Status VERIFIED
-- Closure: Status RELEASED or ARCHIVED
+def get_probe_integrity_timeline(probe_id: int) -> List[dict]
+    """Get chronological integrity status changes"""
 
-**Continuity Documentation**:
-- `transfers` table tracks all handoffs
-- `audit_log` records user, timestamp, action
-- `transfer_reason` documents purpose
-- Supports ISO requirement: "Establish and maintain chain of custody"
+def get_integrity_compromise_interval(probe_id: int) -> Optional[Tuple[str, str]]
+    """Calculate window when tampering occurred"""
 
-### ACPO Guidelines (Digital Evidence) Implementation
+def update_probe_status(probe_id: int, new_status: str) -> bool
+    """Update evidence lifecycle status"""
 
-**Record Keeping**:
-- Comprehensive audit trail in `audit_log`
-- All actions timestamped with ISO format
-- User attribution for each action
-- Status changes tracked with reasons
+def verify_all_probes_integrity() -> List[Tuple]
+    """
+    Automated integrity check
+    Checks both:
+    1. VERIFY_INTEGRITY events in audit log
+    2. Hash comparisons from transfers
+    Returns altered probes
+    """
+```
 
-**Integrity Assurance**:
-- SHA-256 hashing at receipt and transfer
-- Automated verification prevents undetected tampering
-- Hash comparison results logged
-- VALID/ALTERED status visible in reports
+**Database Schema**:
+
+```sql
+-- Users with email-based authentication
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    username TEXT,
+    password_hash TEXT NOT NULL,
+    role TEXT DEFAULT 'CUSTODIAN'
+);
+
+-- Evidence with lifecycle status
+CREATE TABLE probes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    stored_path TEXT NOT NULL,
+    file_size INTEGER,
+    status TEXT DEFAULT 'RECEIVED',
+    uploaded_by TEXT
+);
+
+-- Transfers with reasons and validation
+CREATE TABLE transfers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    probe_id INTEGER NOT NULL,
+    from_user TEXT NOT NULL,
+    to_user TEXT NOT NULL,
+    sha256_at_transfer TEXT NOT NULL,
+    transfer_reason TEXT NOT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(probe_id) REFERENCES probes(id)
+);
+
+-- Comprehensive audit trail
+CREATE TABLE audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_email TEXT,
+    action TEXT NOT NULL,
+    details TEXT,
+    status TEXT,
+    error_msg TEXT
+);
+```
+
+## Data Flow Diagrams
+
+### 1. Evidence Registration Flow
+
+```
+User uploads file
+    ↓
+app.py: Tab "Add Evidence"
+    ↓
+core/hashing.py: hash_file()
+    ↓
+core/storage.py: save_file()
+    ↓
+core/custody.py: add_probe()
+    ↓
+core/database.py: add_probe_to_db()
+    ↓
+core/audit.py: log_probe_added()
+    ↓
+Database: INSERT INTO probes + audit_log
+    ↓
+Response: (probe_id, sha256)
+```
+
+### 2. Custody Transfer Flow (with Chain Validation)
+
+```
+User selects evidence & recipient
+    ↓
+app.py: Tab "Custody Transfer"
+    ↓
+core/custody.py: validate_custody_chain()
+    ├─ Check: Current custodian matches from_user
+    ├─ Check: Not transferring to self
+    └─ Check: No reverse transfer (A→B→A)
+    ↓
+Validation SUCCESS
+    ↓
+core/custody.py: add_transfer()
+    ↓
+core/hashing.py: verify_hash()
+    ├─ Load file from storage
+    ├─ Calculate current hash
+    └─ Compare with original hash
+    ↓
+Integrity Check Result:
+    ├─ VALID: Hash matches
+    └─ ALTERED: Hash differs
+    ↓
+core/database.py: add_transfer_with_reason()
+    ├─ INSERT transfer record
+    ├─ Status: ALWAYS SUCCESS (procedural)
+    └─ Integrity: VALID/ALTERED (separate)
+    ↓
+core/audit.py: log_transfer()
+    ├─ Action: TRANSFER
+    ├─ Status: SUCCESS
+    └─ Integrity: VALID/ALTERED (informational)
+    ↓
+Response: (integrity_valid, original_hash, current_hash)
+```
+
+### 3. Integrity Verification Flow (VERIFY_INTEGRITY Event)
+
+```
+User uploads file for verification
+    ↓
+app.py: Tab "Integrity Check"
+    ↓
+core/custody.py: verify_integrity()
+    ↓
+core/hashing.py: hash_file()
+    ↓
+core/database.py: get_probe_details()
+    ↓
+Compare: uploaded_hash vs original_hash
+    ↓
+Result:
+    ├─ Match: is_valid = True
+    └─ Mismatch: is_valid = False
+    ↓
+core/audit.py: log_integrity_check()
+    ├─ Action: VERIFY_INTEGRITY
+    ├─ Status: SUCCESS (if valid) or FAILURE (if altered)
+    └─ FAILURE Impact: Marks evidence ALTERED permanently
+    ↓
+Database: INSERT INTO audit_log
+    ↓
+Future Checks:
+    └─ get_authoritative_integrity_status()
+        ├─ Finds VERIFY_INTEGRITY FAILURE
+        └─ Returns: ALTERED (irreversible)
+```
+
+### 4. Automated Integrity Check Flow
+
+```
+User clicks "Run Integrity Check"
+    ↓
+app.py: Tab "Status & Automated Checks"
+    ↓
+core/custody.py: run_integrity_check_all()
+    ↓
+core/database.py: get_probes()
+    ├─ Get all evidence
+    └─ For each probe:
+        ↓
+        get_authoritative_integrity_status(probe_id)
+        ├─ Check audit_log for ANY VERIFY_INTEGRITY FAILURE
+        │  ├─ If found: Return ALTERED
+        │  └─ Else: Check latest verification
+        └─ Result:
+           ├─ ALTERED: Evidence compromised
+           ├─ VALID: Evidence intact
+           └─ None: No checks performed
+    ↓
+For each ALTERED probe:
+    ├─ Add to altered list
+    └─ log_integrity_check()
+        ├─ Action: AUTOMATED_VERIFY_INTEGRITY
+        ├─ Status: FAILURE
+        ├─ Source: "AUTOMATED_"
+        └─ Creates audit event marking tampering
+    ↓
+Response: (total_checked, altered_count, altered_details)
+```
+
+### 5. Credential Analysis Flow
+
+```
+User uploads hash file
+    ↓
+app.py: Tab "Credential Analysis"
+    ↓
+core/analysis.py: perform_analysis()
+    ↓
+validate_hash_format()
+    ├─ Check hash length
+    └─ Validate format for type
+    ↓
+create_working_copy()
+    ├─ Create /tmp/hashcat_work_<uuid>/
+    ├─ Write hashes.txt
+    └─ Create wordlist.txt (if not provided)
+    ↓
+run_hashcat_analysis()
+    ├─ Execute: hashcat -m <type> -a 0 hashes.txt wordlist.txt
+    ├─ Output: potfile.pot
+    └─ Count cracked hashes
+    ↓
+parse_analysis_results()
+    ├─ Calculate crack rate %
+    ├─ Generate security assessment
+    └─ Format findings
+    ↓
+cleanup_working_copy()
+    └─ Remove /tmp/hashcat_work_<uuid>/
+    ↓
+core/audit.py: log_credential_analysis()
+    ├─ Action: ANALYSIS
+    ├─ Status: SUCCESS/FAILURE
+    └─ Details: hash_type, total, cracked, rate
+    ↓
+Response: (success, results_dict)
+```
 
 ## Security Architecture
 
-### Authentication
-- **Password Storage**: PBKDF2 hashing with salt (100,000 iterations)
-- **Session Management**: Streamlit session_state
-- **Login Flow**: Username/Password → Authenticate → Set session → Access app
-
-### Data Integrity
-- **File Hashing**: SHA-256 cryptographic hash at:
-  - Evidence registration
-  - Every transfer
-  - Manual verification
-- **Tamper Detection**: Hash comparison at each transfer shows:
-  - ✓ VALID - No changes
-  - ✗ ALTERED - Changes detected
-
-### Audit Trail
-- **Actions Logged**: Add probe, transfers, verifications, errors
-- **User Tracking**: All actions attributed to authenticated user
-- **Timestamps**: Millisecond precision ISO format
-- **Status Tracking**: SUCCESS, WARNING, FAILURE
-
-## Module Dependencies
+### Authentication Security
 
 ```
-app.py
-├── config.py
-├── core/database.py
-├── core/auth.py
-├── core/custody.py
-│   ├── core/database.py
-│   ├── core/hashing.py
-│   ├── core/storage.py
-│   ├── core/audit.py
-│   └── core/report.py
-│       ├── core/database.py
-│       ├── core/hashing.py
-│       └── reportlab
+Password Storage:
+├─ Algorithm: PBKDF2-SHA256
+├─ Iterations: 100,000 (NIST recommended)
+├─ Salt: Automatic per-password
+└─ Storage: password_hash in users table
 
-core/storage.py
-├── config.py
-└── datetime
-
-core/audit.py
-├── core/database.py
-└── datetime
-
-No circular dependencies ✓
+Login Flow:
+├─ Email uniqueness enforced (UNIQUE constraint)
+├─ Constant-time password comparison
+├─ Session management via st.session_state
+└─ Role-based access (ADMIN/INVESTIGATOR/CUSTODIAN)
 ```
 
-## Configuration
+### Integrity Security
 
-### `config.py`
-Centralized configuration for:
-- `DATABASE_PATH` - SQLite database location
-- `EVIDENCE_DIR` - Evidence file storage directory
-- `MAX_FILE_SIZE` - Maximum uploadable file size
-- `STREAMLIT_THEME` - UI theme
-- `APP_VERSION` - Version string
+```
+Evidence Integrity:
+├─ Hash Algorithm: SHA-256 (NIST FIPS 180-4)
+├─ Hash Storage: In database + at each transfer
+├─ Verification: On transfer + manual check
+└─ Tamper Detection: Automatic comparison
 
-## Performance Characteristics
+Authoritative Integrity Status:
+├─ Checks: Entire audit_log history
+├─ Logic: ANY VERIFY_INTEGRITY FAILURE → ALTERED
+├─ Irreversible: Once ALTERED, always ALTERED
+└─ Forensic Principle: Contaminated evidence stays contaminated
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Hash calculation | O(n) | Depends on file size |
-| Transfer validation | O(m) | m = number of previous transfers |
-| Report generation | O(p+t) | p = probes, t = transfers |
-| Audit log retrieval | O(1) | Limited by LIMIT clause |
-| File storage | O(n) | n = file size |
-
-## Extensibility Points
-
-### Adding New Audit Actions
-1. Create new function in `audit.py`: `log_new_action()`
-2. Call from business logic in `custody.py`
-3. Log automatically recorded in database
-
-### Adding New Reports
-1. Create new function in `report.py`: `generate_custom_report()`
-2. Call from `app.py` report tab
-3. Return text or PDF bytes
-
-### Adding New Validation Rules
-1. Extend `check_custody_chain_valid()` in `database.py`
-2. Update error messages
-3. UI automatically shows validation errors
-
-## Testing
-
-### Unit Tests Available
-- `demo_alteration.py` - Tests tamper detection
-- `demo_chain_validation.py` - Tests custody rules
-- Manual testing via app.py
-
-### Test Scenarios
-1. **Authentication**: Login with correct/incorrect credentials
-2. **Chain Validation**: Valid/invalid transfer sequences
-3. **Integrity**: Tamper detection between transfers
-4. **Audit**: Log all actions with correct user attribution
-
-## Future Improvements
-
-1. **Database Encryption** - Encrypt database at rest
-2. **SSL/TLS** - Encrypted network communication
-3. **Multi-Factor Authentication** - Additional security layer
-4. **Role-Based Access** - Different user roles/permissions
-5. **Export Formats** - Additional report formats (CSV, Excel)
-6. **API Layer** - REST API for programmatic access
-7. **Web Deployment** - Cloud-ready configuration
-
----
-
-**Architecture designed for forensic integrity, auditability, and extensibility**
+Transfer vs Integrity:
+├─ Transfer: Always SUCCESS (procedural)
+├─ Integrity: VALID/ALTERED (separate tracking)
+└─ Documentation: Both recorded in audit trail
